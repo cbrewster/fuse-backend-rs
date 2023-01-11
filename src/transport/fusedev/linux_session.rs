@@ -13,11 +13,12 @@ use std::fs::{File, OpenOptions};
 use std::ops::Deref;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use nix::errno::Errno;
-use nix::fcntl::{fcntl, FcntlArg, OFlag};
+use nix::fcntl::{fcntl, FcntlArg, FdFlag, OFlag};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::poll::{poll, PollFd, PollFlags};
 use nix::sys::epoll::{epoll_ctl, EpollEvent, EpollFlags, EpollOp};
@@ -30,7 +31,7 @@ const FUSE_KERN_BUF_SIZE: usize = 256;
 const FUSE_HEADER_SIZE: usize = 0x1000;
 const POLL_EVENTS_CAPACITY: usize = 1024;
 
-const FUSE_DEVICE: &str = "/dev/fuse";
+// const FUSE_DEVICE: &str = "/dev/fuse";
 const FUSE_FSTYPE: &str = "fuse";
 
 const EXIT_FUSE_EVENT: Token = Token(0);
@@ -311,46 +312,97 @@ impl FuseChannel {
 
 /// Mount a fuse file system
 fn fuse_kern_mount(mountpoint: &Path, fsname: &str, subtype: &str, flags: MsFlags) -> Result<File> {
-    let file = OpenOptions::new()
-        .create(false)
-        .read(true)
-        .write(true)
-        .open(FUSE_DEVICE)
-        .map_err(|e| SessionFailure(format!("open {}: {}", FUSE_DEVICE, e)))?;
+    // let file = OpenOptions::new()
+    //     .create(false)
+    //     .read(true)
+    //     .write(true)
+    //     .open(FUSE_DEVICE)
+    //     .map_err(|e| SessionFailure(format!("open {}: {}", FUSE_DEVICE, e)))?;
+    // let meta = mountpoint
+    //     .metadata()
+    //     .map_err(|e| SessionFailure(format!("stat {:?}: {}", mountpoint, e)))?;
+    // let opts = format!(
+    //     "default_permissions,allow_other,fd={},rootmode={:o},user_id={},group_id={}",
+    //     file.as_raw_fd(),
+    //     meta.permissions().mode() & libc::S_IFMT,
+    //     getuid(),
+    //     getgid(),
+    // );
+    // let mut fstype = String::from(FUSE_FSTYPE);
+    // if !subtype.is_empty() {
+    //     fstype.push('.');
+    //     fstype.push_str(subtype);
+    // }
+
+    // if let Some(mountpoint) = mountpoint.to_str() {
+    //     info!(
+    //         "mount source {} dest {} with fstype {} opts {} fd {}",
+    //         fsname,
+    //         mountpoint,
+    //         fstype,
+    //         opts,
+    //         file.as_raw_fd(),
+    //     );
+    // }
+    // mount(
+    //     Some(fsname),
+    //     mountpoint,
+    //     Some(fstype.deref()),
+    //     flags,
+    //     Some(opts.deref()),
+    // )
+    // .map_err(|e| SessionFailure(format!("failed to mount {:?}: {}", mountpoint, e)))?;
+
+    // Ok(file)
+
     let meta = mountpoint
         .metadata()
         .map_err(|e| SessionFailure(format!("stat {:?}: {}", mountpoint, e)))?;
+
     let opts = format!(
-        "default_permissions,allow_other,fd={},rootmode={:o},user_id={},group_id={}",
-        file.as_raw_fd(),
+        "default_permissions,allow_other,rootmode={:o},user_id={},group_id={}{}",
         meta.permissions().mode() & libc::S_IFMT,
         getuid(),
         getgid(),
+        if flags.contains(MsFlags::MS_RDONLY) {
+            ",ro"
+        } else {
+            ""
+        },
     );
+
     let mut fstype = String::from(FUSE_FSTYPE);
     if !subtype.is_empty() {
         fstype.push('.');
         fstype.push_str(subtype);
     }
 
-    if let Some(mountpoint) = mountpoint.to_str() {
-        info!(
-            "mount source {} dest {} with fstype {} opts {} fd {}",
-            fsname,
-            mountpoint,
-            fstype,
-            opts,
-            file.as_raw_fd(),
-        );
+    let (rx, tx) = UnixDatagram::pair()
+        .map_err(|e| SessionFailure(format!("failed to open unix datagram pair: {}", e)))?;
+
+    nix::fcntl::fcntl(rx.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::empty()))
+        .map_err(|e| SessionFailure(format!("failed to setfd: {}", e)))?;
+
+    let code = std::process::Command::new("fusermount")
+        .env("_FUSE_COMMFD", format!("{}", rx.as_raw_fd()))
+        .arg("-o")
+        .arg(opts)
+        .arg(mountpoint)
+        .status()
+        .map_err(|e| SessionFailure(format!("failed to run fusermount: {}", e)))?
+        .code();
+    if code != Some(0) {
+        return Err(SessionFailure(format!(
+            "fusermount did not exit with 0: {:?}",
+            code
+        )));
     }
-    mount(
-        Some(fsname),
-        mountpoint,
-        Some(fstype.deref()),
-        flags,
-        Some(opts.deref()),
-    )
-    .map_err(|e| SessionFailure(format!("failed to mount {:?}: {}", mountpoint, e)))?;
+
+    let mut dummy = [0u8; 8];
+    let (_, fuse_fd) = vmm_sys_util::sock_ctrl_msg::ScmSocket::recv_with_fd(&tx, &mut dummy)
+        .map_err(|e| SessionFailure(format!("failed to receive docker ctrl message: {}", e)))?;
+
+    let file = fuse_fd.ok_or_else(|| SessionFailure("failed to get FUSE fd".into()))?;
 
     Ok(file)
 }
@@ -372,8 +424,21 @@ fn fuse_kern_umount(mountpoint: &str, file: File) -> Result<()> {
     // Drop to close fuse session fd, otherwise synchronous umount can recurse into filesystem and
     // cause deadlock.
     drop(file);
-    umount2(mountpoint, MntFlags::MNT_DETACH)
-        .map_err(|e| SessionFailure(format!("failed to umount {}: {}", mountpoint, e)))
+
+    let code = std::process::Command::new("fusermount")
+        .arg("-u")
+        .arg(mountpoint)
+        .status()
+        .map_err(|e| SessionFailure(format!("failed to run fusermount unmount: {}", e)))?
+        .code();
+    if code != Some(0) {
+        return Err(SessionFailure(format!(
+            "fusermount umount did not exit with 0: {:?}",
+            code
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
