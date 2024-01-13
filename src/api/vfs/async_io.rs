@@ -3,7 +3,9 @@
 
 use std::io;
 
+use async_stream::try_stream;
 use async_trait::async_trait;
+use futures::{stream::BoxStream, StreamExt};
 
 use super::*;
 
@@ -207,6 +209,128 @@ impl AsyncFileSystem for Vfs {
             (Left(fs), idata) => fs.async_fsyncdir(ctx, idata.ino(), datasync, handle).await,
             (Right(fs), idata) => fs.async_fsyncdir(ctx, idata.ino(), datasync, handle).await,
         }
+    }
+
+    fn async_readdir<'a, 'b, 'async_trait>(
+        &'a self,
+        ctx: &'b Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<'async_trait, io::Result<OwnedDirEntry>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(try_stream! {
+            match self.get_real_rootfs(inode)? {
+                (Left(fs), idata) => {
+                    let mut stream = fs.async_readdir(
+                        ctx,
+                        idata.ino(),
+                        handle,
+                        size,
+                        offset,
+                    );
+
+                    while let Some(dir_entry) = stream.next().await {
+                        let mut dir_entry = dir_entry?;
+                        match self.mountpoints.load().get(&dir_entry.ino) {
+                            // cross mountpoint, return mount root entry
+                            Some(mnt) => {
+                                dir_entry.ino = self.convert_inode(mnt.fs_idx, mnt.ino)?;
+                            }
+                            None => {
+                                dir_entry.ino =
+                                    self.convert_inode(idata.fs_idx(), dir_entry.ino)?;
+                            }
+                        }
+                        yield dir_entry;
+                    }
+                }
+
+                (Right(fs), idata) => {
+                    let mut stream = fs.async_readdir(
+                        ctx,
+                        idata.ino(),
+                        handle,
+                        size,
+                        offset,
+                    );
+
+                    while let Some(dir_entry) = stream.next().await {
+                        let mut dir_entry = dir_entry?;
+                        dir_entry.ino = self.convert_inode(idata.fs_idx(), dir_entry.ino)?;
+                        yield dir_entry;
+                    }
+                },
+            }
+        })
+    }
+
+    fn async_readdirplus<'a, 'b, 'async_trait>(
+        &'a self,
+        ctx: &'b Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<'async_trait, io::Result<(OwnedDirEntry, Entry)>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(try_stream! {
+            match self.get_real_rootfs(inode)? {
+                (Left(fs), idata) => {
+                    let mut stream = fs.async_readdirplus(
+                        ctx,
+                        idata.ino(),
+                        handle,
+                        size,
+                        offset,
+                    );
+
+                    while let Some(entry) = stream.next().await {
+                        let (mut dir_entry, mut entry) = entry?;
+                        match self.mountpoints.load().get(&dir_entry.ino) {
+                            // cross mountpoint, return mount root entry
+                            Some(mnt) => {
+                                dir_entry.ino = self.convert_inode(mnt.fs_idx, mnt.ino)?;
+                            }
+                            None => {
+                                dir_entry.ino =
+                                    self.convert_inode(idata.fs_idx(), dir_entry.ino)?;
+                            }
+                        }
+                        entry.attr.st_ino = entry.inode;
+                        yield (dir_entry, entry);
+                    }
+                }
+
+                (Right(fs), idata) => {
+                    let mut stream = fs.async_readdirplus(
+                        ctx,
+                        idata.ino(),
+                        handle,
+                        size,
+                        offset,
+                    );
+
+                    while let Some(entry) = stream.next().await {
+                        let (mut dir_entry, mut entry) = entry?;
+                        dir_entry.ino = self.convert_inode(idata.fs_idx(), entry.inode)?;
+                        entry.inode = dir_entry.ino;
+                        entry.attr.st_ino = entry.inode;
+                        self.remap_attr_id(true, &mut entry.attr);
+                        yield (dir_entry, entry);
+                    }
+                },
+            }
+        })
     }
 }
 

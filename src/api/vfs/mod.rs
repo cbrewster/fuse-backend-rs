@@ -1150,9 +1150,12 @@ mod tests {
 
     #[cfg(feature = "async-io")]
     mod async_io {
+        use std::pin::Pin;
+
         use super::*;
         use crate::abi::fuse_abi::{OpenOptions, SetattrValid};
         use async_trait::async_trait;
+        use futures::{stream::BoxStream, Stream};
 
         #[allow(unused_variables)]
         #[async_trait]
@@ -1265,6 +1268,38 @@ mod tests {
                 datasync: bool,
                 handle: <Self as FileSystem>::Handle,
             ) -> Result<()> {
+                unimplemented!()
+            }
+
+            fn async_readdir<'a, 'b, 'async_trait>(
+                &'a self,
+                ctx: &'b Context,
+                inode: Self::Inode,
+                handle: Self::Handle,
+                size: u32,
+                offset: u64,
+            ) -> BoxStream<'async_trait, io::Result<OwnedDirEntry>>
+            where
+                'a: 'async_trait,
+                'b: 'async_trait,
+                Self: 'async_trait,
+            {
+                unimplemented!()
+            }
+
+            fn async_readdirplus<'a, 'b, 'async_trait>(
+                &'a self,
+                ctx: &'b Context,
+                inode: Self::Inode,
+                handle: Self::Handle,
+                size: u32,
+                offset: u64,
+            ) -> BoxStream<'async_trait, io::Result<(OwnedDirEntry, Entry)>>
+            where
+                'a: 'async_trait,
+                'b: 'async_trait,
+                Self: 'async_trait,
+            {
                 unimplemented!()
             }
         }
@@ -1396,6 +1431,38 @@ mod tests {
                 datasync: bool,
                 handle: <Self as FileSystem>::Handle,
             ) -> Result<()> {
+                unimplemented!()
+            }
+
+            fn async_readdir<'a, 'b, 'async_trait>(
+                &'a self,
+                ctx: &'b Context,
+                inode: Self::Inode,
+                handle: Self::Handle,
+                size: u32,
+                offset: u64,
+            ) -> BoxStream<'async_trait, io::Result<OwnedDirEntry>>
+            where
+                'a: 'async_trait,
+                'b: 'async_trait,
+                Self: 'async_trait,
+            {
+                unimplemented!()
+            }
+
+            fn async_readdirplus<'a, 'b, 'async_trait>(
+                &'a self,
+                ctx: &'b Context,
+                inode: Self::Inode,
+                handle: Self::Handle,
+                size: u32,
+                offset: u64,
+            ) -> BoxStream<'async_trait, io::Result<(OwnedDirEntry, Entry)>>
+            where
+                'a: 'async_trait,
+                'b: 'async_trait,
+                Self: 'async_trait,
+            {
                 unimplemented!()
             }
         }

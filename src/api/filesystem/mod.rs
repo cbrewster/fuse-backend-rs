@@ -113,6 +113,28 @@ pub struct DirEntry<'a> {
     pub name: &'a [u8],
 }
 
+/// Represents information about an entry in a directory.
+#[derive(Clone)]
+pub struct OwnedDirEntry {
+    /// The inode number for this entry. This does NOT have to be the same as the `Inode` for this
+    /// directory entry. However, it must be the same as the `attr.st_ino` field of the `Entry` that
+    /// would be returned by a `lookup` request in the parent directory for `name`.
+    pub ino: ino64_t,
+
+    /// Any non-zero value that the kernel can use to identify the current point in the directory
+    /// entry stream. It does not need to be the actual physical position. A value of `0` is
+    /// reserved to mean "from the beginning" and should never be used. The `offset` value of the
+    /// first entry in a stream should point to the beginning of the second entry and so on.
+    pub offset: u64,
+
+    /// The type of this directory entry. Valid values are any of the `libc::DT_*` constants.
+    pub type_: u32,
+
+    /// The name of this directory entry. There are no requirements for the contents of this field
+    /// and any sequence of bytes is considered valid.
+    pub name: Vec<u8>,
+}
+
 /// Represents a fuse lock
 #[derive(Copy, Clone)]
 pub struct FileLock {

@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 
-use super::{Context, Entry, FileSystem, ZeroCopyReader, ZeroCopyWriter};
+use super::{Context, Entry, FileSystem, OwnedDirEntry, ZeroCopyReader, ZeroCopyWriter};
 use crate::abi::fuse_abi::{stat64, CreateIn, OpenOptions, SetattrValid};
 use crate::file_traits::AsyncFileReadWriteVolatile;
 
@@ -611,82 +612,78 @@ pub trait AsyncFileSystem: FileSystem {
             // Matches the behavior of libfuse.
             Ok((None, OpenOptions::empty()))
         }
-
-        /// Read a directory.
-        ///
-        /// `handle` is the `Handle` returned by the file system from the `opendir` method, if any. If
-        /// the file system did not return a `Handle` from `opendir` then the contents of `handle` are
-        /// undefined.
-        ///
-        /// `size` indicates the maximum number of bytes that should be returned by this method.
-        ///
-        /// If `offset` is non-zero then it corresponds to one of the `offset` values from a `DirEntry`
-        /// that was previously returned by a call to `readdir` for the same handle. In this case the
-        /// file system should skip over the entries before the position defined by the `offset` value.
-        /// If entries were added or removed while the `Handle` is open then the file system may still
-        /// include removed entries or skip newly created entries. However, adding or removing entries
-        /// should never cause the file system to skip over unrelated entries or include an entry more
-        /// than once. This means that `offset` cannot be a simple index and must include sufficient
-        /// information to uniquely determine the next entry in the list even when the set of entries is
-        /// being changed.
-        ///
-        /// The file system may return entries for the current directory (".") and parent directory
-        /// ("..") but is not required to do so. If the file system does not return these entries, then
-        /// they are implicitly added by the kernel.
-        ///
-        /// The lookup count for `Inode`s associated with the returned directory entries is **NOT**
-        /// affected by this method.
-        ///
-        // TODO(chirantan): Change method signature to return `Iterator<DirEntry>` rather than using an
-        // `FnMut` for adding entries.
-        fn readdir(
-            &self,
-            ctx: Context,
-            inode: Self::Inode,
-            handle: Self::Handle,
-            size: u32,
-            offset: u64,
-            add_entry: &mut dyn FnMut(DirEntry) -> io::Result<usize>,
-        ) -> io::Result<()> {
-            Err(io::Error::from_raw_os_error(libc::ENOSYS))
-        }
-
-        /// Read a directory with entry attributes.
-        ///
-        /// Like `readdir` but also includes the attributes for each directory entry.
-        ///
-        /// `handle` is the `Handle` returned by the file system from the `opendir` method, if any. If
-        /// the file system did not return a `Handle` from `opendir` then the contents of `handle` are
-        /// undefined.
-        ///
-        /// `size` indicates the maximum number of bytes that should be returned by this method.
-        ///
-        /// Unlike `readdir`, the lookup count for `Inode`s associated with the returned directory
-        /// entries **IS** affected by this method (since it returns an `Entry` for each `DirEntry`).
-        /// The count for each `Inode` should be increased by 1.
-        ///
-        /// File systems that implement this method should enable the `FsOptions::DO_READDIRPLUS`
-        /// feature when supported by the kernel. The kernel will not call this method unless that
-        /// feature is enabled.
-        ///
-        /// Additionally, file systems that implement both `readdir` and `readdirplus` should enable the
-        /// `FsOptions::READDIRPLUS_AUTO` feature to allow the kernel to issue both `readdir` and
-        /// `readdirplus` requests, depending on how much information is expected to be required.
-        ///
-        /// TODO(chirantan): Change method signature to return `Iterator<(DirEntry, Entry)>` rather than
-        /// using an `FnMut` for adding entries.
-        fn readdirplus(
-            &self,
-            ctx: Context,
-            inode: Self::Inode,
-            handle: Self::Handle,
-            size: u32,
-            offset: u64,
-            add_entry: &mut dyn FnMut(DirEntry, Entry) -> io::Result<usize>,
-        ) -> io::Result<()> {
-            Err(io::Error::from_raw_os_error(libc::ENOSYS))
-        }
     */
+
+    /// Read a directory.
+    ///
+    /// `handle` is the `Handle` returned by the file system from the `opendir` method, if any. If
+    /// the file system did not return a `Handle` from `opendir` then the contents of `handle` are
+    /// undefined.
+    ///
+    /// `size` indicates the maximum number of bytes that should be returned by this method.
+    ///
+    /// If `offset` is non-zero then it corresponds to one of the `offset` values from a `DirEntry`
+    /// that was previously returned by a call to `readdir` for the same handle. In this case the
+    /// file system should skip over the entries before the position defined by the `offset` value.
+    /// If entries were added or removed while the `Handle` is open then the file system may still
+    /// include removed entries or skip newly created entries. However, adding or removing entries
+    /// should never cause the file system to skip over unrelated entries or include an entry more
+    /// than once. This means that `offset` cannot be a simple index and must include sufficient
+    /// information to uniquely determine the next entry in the list even when the set of entries is
+    /// being changed.
+    ///
+    /// The file system may return entries for the current directory (".") and parent directory
+    /// ("..") but is not required to do so. If the file system does not return these entries, then
+    /// they are implicitly added by the kernel.
+    ///
+    /// The lookup count for `Inode`s associated with the returned directory entries is **NOT**
+    /// affected by this method.
+    fn async_readdir<'a, 'b, 'async_trait>(
+        &'a self,
+        ctx: &'b Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<'async_trait, io::Result<OwnedDirEntry>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait;
+
+    /// Read a directory with entry attributes.
+    ///
+    /// Like `readdir` but also includes the attributes for each directory entry.
+    ///
+    /// `handle` is the `Handle` returned by the file system from the `opendir` method, if any. If
+    /// the file system did not return a `Handle` from `opendir` then the contents of `handle` are
+    /// undefined.
+    ///
+    /// `size` indicates the maximum number of bytes that should be returned by this method.
+    ///
+    /// Unlike `readdir`, the lookup count for `Inode`s associated with the returned directory
+    /// entries **IS** affected by this method (since it returns an `Entry` for each `DirEntry`).
+    /// The count for each `Inode` should be increased by 1.
+    ///
+    /// File systems that implement this method should enable the `FsOptions::DO_READDIRPLUS`
+    /// feature when supported by the kernel. The kernel will not call this method unless that
+    /// feature is enabled.
+    ///
+    /// Additionally, file systems that implement both `readdir` and `readdirplus` should enable the
+    /// `FsOptions::READDIRPLUS_AUTO` feature to allow the kernel to issue both `readdir` and
+    /// `readdirplus` requests, depending on how much information is expected to be required.
+    fn async_readdirplus<'a, 'b, 'async_trait>(
+        &'a self,
+        ctx: &'b Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<'async_trait, io::Result<(OwnedDirEntry, Entry)>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait;
 
     /// Synchronize the contents of a directory.
     ///
@@ -1018,5 +1015,38 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for Arc<FS> {
         Self: 'async_trait,
     {
         self.deref().async_fsyncdir(ctx, inode, datasync, handle)
+    }
+
+    fn async_readdir<'a, 'b, 'async_trait>(
+        &'a self,
+        ctx: &'b Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<'async_trait, io::Result<OwnedDirEntry>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.deref().async_readdir(ctx, inode, handle, size, offset)
+    }
+
+    fn async_readdirplus<'a, 'b, 'async_trait>(
+        &'a self,
+        ctx: &'b Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<'async_trait, io::Result<(OwnedDirEntry, Entry)>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.deref()
+            .async_readdirplus(ctx, inode, handle, size, offset)
     }
 }

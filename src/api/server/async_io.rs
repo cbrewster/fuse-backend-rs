@@ -7,15 +7,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use vm_memory::ByteValued;
 
 use crate::abi::fuse_abi::{
-    stat64, AttrOut, CreateIn, EntryOut, FallocateIn, FsyncIn, GetattrIn, Opcode, OpenIn, OpenOut,
-    OutHeader, ReadIn, SetattrIn, SetattrValid, WriteIn, WriteOut, FATTR_FH, GETATTR_FH,
+    stat64, AttrOut, CreateIn, Dirent, EntryOut, FallocateIn, FsyncIn, GetattrIn, Opcode, OpenIn,
+    OpenOut, OutHeader, ReadIn, SetattrIn, SetattrValid, WriteIn, WriteOut, FATTR_FH, GETATTR_FH,
     KERNEL_MINOR_VERSION_LOOKUP_NEGATIVE_ENTRY_ZERO, READ_LOCKOWNER, WRITE_CACHE, WRITE_LOCKOWNER,
 };
 use crate::api::filesystem::{
-    AsyncFileSystem, AsyncZeroCopyReader, AsyncZeroCopyWriter, ZeroCopyReader, ZeroCopyWriter,
+    AsyncFileSystem, AsyncZeroCopyReader, AsyncZeroCopyWriter, Entry, OwnedDirEntry,
+    ZeroCopyReader, ZeroCopyWriter,
 };
 use crate::api::server::{
     MetricsHook, Server, ServerUtil, SrvContext, BUFFER_HEADER_SIZE, MAX_BUFFER_SIZE,
@@ -23,6 +26,8 @@ use crate::api::server::{
 use crate::file_traits::{AsyncFileReadWriteVolatile, FileReadWriteVolatile};
 use crate::transport::{FsCacheReqHandler, Reader, Writer};
 use crate::{bytes_to_cstr, encode_io_error_kind, BitmapSlice, Error, Result};
+
+use super::DIRENT_PADDING;
 
 struct AsyncZcReader<'a, S: BitmapSlice = ()>(Reader<'a, S>);
 
@@ -171,7 +176,7 @@ impl<F: AsyncFileSystem + Sync> Server<F> {
             x if x == Opcode::Flush as u32 => self.flush(ctx),
             x if x == Opcode::Init as u32 => self.init(ctx),
             x if x == Opcode::Opendir as u32 => self.opendir(ctx),
-            x if x == Opcode::Readdir as u32 => self.readdir(ctx),
+            x if x == Opcode::Readdir as u32 => self.async_readdir(ctx).await,
             x if x == Opcode::Releasedir as u32 => self.releasedir(ctx),
             x if x == Opcode::Fsyncdir as u32 => self.async_fsyncdir(ctx).await,
             x if x == Opcode::Getlk as u32 => self.getlk(ctx),
@@ -186,7 +191,7 @@ impl<F: AsyncFileSystem + Sync> Server<F> {
             x if x == Opcode::BatchForget as u32 => self.batch_forget(ctx),
             x if x == Opcode::Fallocate as u32 => self.async_fallocate(ctx).await,
             #[cfg(target_os = "linux")]
-            x if x == Opcode::Readdirplus as u32 => self.readdirplus(ctx),
+            x if x == Opcode::Readdirplus as u32 => self.async_readdirplus(ctx).await,
             #[cfg(target_os = "linux")]
             x if x == Opcode::Rename2 as u32 => self.rename2(ctx),
             #[cfg(target_os = "linux")]
@@ -527,6 +532,90 @@ impl<F: AsyncFileSystem + Sync> Server<F> {
             Err(e) => ctx.async_reply_error(e).await,
         }
     }
+
+    async fn async_do_readdir<S: BitmapSlice>(
+        &self,
+        mut ctx: SrvContext<'_, F, S>,
+        plus: bool,
+    ) -> Result<usize> {
+        let ReadIn {
+            fh, offset, size, ..
+        } = ctx.r.read_obj().map_err(Error::DecodeMessage)?;
+
+        if size > MAX_BUFFER_SIZE {
+            return ctx
+                .async_reply_error_explicit(io::Error::from_raw_os_error(libc::ENOMEM))
+                .await;
+        }
+
+        let available_bytes = ctx.w.available_bytes();
+        if available_bytes < size as usize {
+            return ctx
+                .async_reply_error_explicit(io::Error::from_raw_os_error(libc::ENOMEM))
+                .await;
+        }
+
+        // Skip over enough bytes for the header.
+        let mut cursor = match ctx.w.split_at(size_of::<OutHeader>()) {
+            Ok(v) => v,
+            Err(_e) => return Err(Error::InvalidHeaderLength),
+        };
+
+        let res: io::Result<()> = async {
+            let mut stream: BoxStream<io::Result<(OwnedDirEntry, Option<Entry>)>> = if plus {
+                Box::pin(
+                    self.fs
+                        .async_readdirplus(ctx.context(), ctx.nodeid(), fh.into(), size, offset)
+                        .and_then(|(dir_entry, entry)| async move { Ok((dir_entry, Some(entry))) }),
+                )
+            } else {
+                Box::pin(
+                    self.fs
+                        .async_readdir(ctx.context(), ctx.nodeid(), fh.into(), size, offset)
+                        .and_then(|dir_entry| async move { Ok((dir_entry, None)) }),
+                )
+            };
+
+            while let Some(entry) = stream.next().await {
+                let (dir_entry, entry) = entry?;
+                match async_add_dirent(&mut cursor, size, dir_entry, entry).await {
+                    Ok(0) => return Ok(()),
+                    Err(err) => return Err(err),
+                    _ => {}
+                };
+            }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = res {
+            ctx.async_reply_error_explicit(e).await
+        } else {
+            // Don't use `reply_ok` because we need to set a custom size length for the
+            // header.
+            let out = OutHeader {
+                len: (size_of::<OutHeader>() + cursor.bytes_written()) as u32,
+                error: 0,
+                unique: ctx.unique(),
+            };
+
+            ctx.w
+                .async_write_all(out.as_slice())
+                .await
+                .map_err(Error::EncodeMessage)?;
+            ctx.w.commit(Some(&cursor)).map_err(Error::EncodeMessage)?;
+            Ok(out.len as usize)
+        }
+    }
+
+    async fn async_readdir<S: BitmapSlice>(&self, ctx: SrvContext<'_, F, S>) -> Result<usize> {
+        self.async_do_readdir(ctx, false).await
+    }
+
+    async fn async_readdirplus<S: BitmapSlice>(&self, ctx: SrvContext<'_, F, S>) -> Result<usize> {
+        self.async_do_readdir(ctx, true).await
+    }
 }
 
 impl<'a, F: AsyncFileSystem, S: BitmapSlice> SrvContext<'a, F, S> {
@@ -612,6 +701,66 @@ impl<'a, F: AsyncFileSystem, S: BitmapSlice> SrvContext<'a, F, S> {
             }
             Err(e) => self.async_reply_error(e).await,
         }
+    }
+}
+
+async fn async_add_dirent<S: BitmapSlice>(
+    cursor: &mut Writer<'_, S>,
+    max: u32,
+    d: OwnedDirEntry,
+    entry: Option<Entry>,
+) -> io::Result<usize> {
+    if d.name.len() > ::std::u32::MAX as usize {
+        return Err(io::Error::from_raw_os_error(libc::EOVERFLOW));
+    }
+
+    let dirent_len = size_of::<Dirent>()
+        .checked_add(d.name.len())
+        .ok_or_else(|| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
+
+    // Directory entries must be padded to 8-byte alignment.  If adding 7 causes
+    // an overflow then this dirent cannot be properly padded.
+    let padded_dirent_len = dirent_len
+        .checked_add(7)
+        .map(|l| l & !7)
+        .ok_or_else(|| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
+
+    let total_len = if entry.is_some() {
+        padded_dirent_len
+            .checked_add(size_of::<EntryOut>())
+            .ok_or_else(|| io::Error::from_raw_os_error(libc::EOVERFLOW))?
+    } else {
+        padded_dirent_len
+    };
+
+    // Skip the entry if there's no enough space left.
+    if (max as usize).saturating_sub(cursor.bytes_written()) < total_len {
+        Ok(0)
+    } else {
+        if let Some(entry) = entry {
+            cursor
+                .async_write_all(EntryOut::from(entry).as_slice())
+                .await?;
+        }
+
+        let dirent = Dirent {
+            ino: d.ino,
+            off: d.offset,
+            namelen: d.name.len() as u32,
+            type_: d.type_,
+        };
+
+        cursor.async_write_all(dirent.as_slice()).await?;
+        cursor.async_write_all(&d.name).await?;
+
+        // We know that `dirent_len` <= `padded_dirent_len` due to the check above
+        // so there's no need for checked arithmetic.
+        let padding = padded_dirent_len - dirent_len;
+        if padding > 0 {
+            cursor.async_write_all(&DIRENT_PADDING[..padding]).await?;
+        }
+
+        Ok(total_len)
     }
 }
 

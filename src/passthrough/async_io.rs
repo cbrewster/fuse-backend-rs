@@ -7,15 +7,19 @@
 
 use std::io;
 use std::mem::ManuallyDrop;
+use std::pin::Pin;
 
 use async_trait::async_trait;
+use futures::stream::BoxStream;
+use futures::Stream;
 
 use super::*;
 use crate::abi::fuse_abi::{
     CreateIn, Opcode, OpenOptions, SetattrValid, FOPEN_IN_KILL_SUIDGID, WRITE_KILL_PRIV,
 };
 use crate::api::filesystem::{
-    AsyncFileSystem, AsyncZeroCopyReader, AsyncZeroCopyWriter, Context, FileSystem,
+    AsyncFileSystem, AsyncZeroCopyReader, AsyncZeroCopyWriter, Context, DirEntry, FileSystem,
+    OwnedDirEntry,
 };
 
 impl<S: BitmapSlice + Send + Sync + 'static> BackendFileSystem for PassthroughFs<S> {
@@ -803,5 +807,37 @@ impl<S: BitmapSlice + Send + Sync> AsyncFileSystem for PassthroughFs<S> {
         handle: <Self as FileSystem>::Handle,
     ) -> io::Result<()> {
         self.async_fsync(ctx, inode, datasync, handle).await
+    }
+
+    fn async_readdir<'a, 'b, 'async_trait>(
+        &'a self,
+        ctx: &'b Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<'async_trait, io::Result<OwnedDirEntry>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        unimplemented!()
+    }
+
+    fn async_readdirplus<'a, 'b, 'async_trait>(
+        &'a self,
+        ctx: &'b Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<'async_trait, io::Result<(OwnedDirEntry, Entry)>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        unimplemented!()
     }
 }

@@ -10,12 +10,16 @@
 //! - Inodes managed by the PseudoFs is readonly, even for the permission bits.
 
 use arc_swap::ArcSwap;
+use async_stream::try_stream;
 use async_trait::async_trait;
+use futures::stream::BoxStream;
+use futures::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::io::{Error, Result};
 use std::ops::Deref;
 use std::path::{Component, Path};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -330,6 +334,47 @@ impl PseudoFs {
     }
 }
 
+#[cfg(feature = "async-io")]
+impl PseudoFs {
+    fn async_do_readdir<'a, 'b>(
+        &'a self,
+        parent: u64,
+        size: u32,
+        offset: u64,
+    ) -> BoxStream<Result<OwnedDirEntry>>
+    where
+        'a: 'b,
+        Self: 'b,
+    {
+        Box::pin(try_stream! {
+            if size == 0 {
+                return;
+            }
+
+            let inodes = self.inodes.load();
+            let inode = inodes
+                .get(&parent)
+                .ok_or_else(|| Error::from_raw_os_error(libc::ENOENT))?;
+            let children = inode.children.load();
+
+            if offset >= children.len() as u64 {
+                return;
+            }
+
+            let mut next = offset + 1;
+            for child in children[offset as usize..].iter() {
+                yield OwnedDirEntry {
+                    ino: child.ino,
+                    offset: next,
+                    type_: 0,
+                    name: child.name.clone().into(),
+                };
+                next += 1;
+            }
+        })
+    }
+}
+
 impl Default for PseudoFs {
     fn default() -> Self {
         Self::new()
@@ -525,6 +570,45 @@ impl AsyncFileSystem for PseudoFs {
         handle: Self::Handle,
     ) -> Result<()> {
         self.fsyncdir(ctx, inode, datasync, handle)
+    }
+
+    fn async_readdir<'a, 'b, 'async_trait>(
+        &'a self,
+        _ctx: &'b Context,
+        inode: Self::Inode,
+        _handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> Pin<Box<dyn Stream<Item = Result<OwnedDirEntry>> + Send + 'async_trait>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.async_do_readdir(inode, size, offset)
+    }
+
+    fn async_readdirplus<'a, 'b, 'async_trait>(
+        &'a self,
+        _ctx: &'b Context,
+        inode: Self::Inode,
+        _handle: Self::Handle,
+        size: u32,
+        offset: u64,
+    ) -> Pin<Box<dyn Stream<Item = Result<(OwnedDirEntry, Entry)>> + Send + 'async_trait>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(try_stream! {
+            let mut stream = self.async_do_readdir(inode, size, offset);
+            while let Some(dir_entry) = stream.next().await {
+                let dir_entry = dir_entry?;
+                let entry = self.get_entry(dir_entry.ino);
+                yield (dir_entry, entry);
+            }
+        })
     }
 }
 

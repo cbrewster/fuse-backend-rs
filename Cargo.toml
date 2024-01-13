@@ -35,6 +35,8 @@ virtio-queue = { version = "0.7", optional = true }
 vhost = { version = "0.6", features = ["vhost-user-slave"], optional = true }
 versionize_derive = { version = "0.1.6", optional = true }
 versionize = { version = "0.1.10", optional = true }
+futures = "0.3.30"
+async-stream = "0.3.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation-sys = { version = ">=0.8", optional = true }
