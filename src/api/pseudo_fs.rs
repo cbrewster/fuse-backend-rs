@@ -10,6 +10,7 @@
 //! - Inodes managed by the PseudoFs is readonly, even for the permission bits.
 
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::io::{Error, Result};
@@ -19,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use crate::abi::fuse_abi::{stat64, Attr};
+use crate::abi::fuse_abi::{stat64, Attr, CreateIn};
 use crate::api::filesystem::*;
 
 // ID 0 is reserved for invalid entry, and ID 1 is used for ROOT_ID.
@@ -410,6 +411,120 @@ impl FileSystem for PseudoFs {
 
     fn access(&self, _ctx: &Context, _inode: u64, _mask: u32) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(feature = "async-io")]
+#[async_trait]
+impl AsyncFileSystem for PseudoFs {
+    async fn async_lookup(&self, ctx: &Context, parent: Self::Inode, name: &CStr) -> Result<Entry> {
+        self.lookup(ctx, parent, name)
+    }
+
+    async fn async_getattr(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        handle: Option<Self::Handle>,
+    ) -> Result<(stat64, Duration)> {
+        self.getattr(ctx, inode, handle)
+    }
+
+    async fn async_setattr(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        attr: stat64,
+        handle: Option<Self::Handle>,
+        valid: SetattrValid,
+    ) -> Result<(stat64, Duration)> {
+        self.setattr(ctx, inode, attr, handle, valid)
+    }
+
+    async fn async_open(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        flags: u32,
+        fuse_flags: u32,
+    ) -> Result<(Option<Self::Handle>, OpenOptions)> {
+        let (handle, opts, _) = self.open(ctx, inode, flags, fuse_flags)?;
+        Ok((handle, opts))
+    }
+
+    async fn async_create(
+        &self,
+        ctx: &Context,
+        parent: Self::Inode,
+        name: &CStr,
+        args: CreateIn,
+    ) -> Result<(Entry, Option<Self::Handle>, OpenOptions)> {
+        let (entry, handle, opts, _) = self.create(ctx, parent, name, args)?;
+        Ok((entry, handle, opts))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn async_read(
+        &self,
+        _ctx: &Context,
+        _inode: Self::Inode,
+        _handle: Self::Handle,
+        _w: &mut (dyn AsyncZeroCopyWriter + Send),
+        _size: u32,
+        _offset: u64,
+        _lock_owner: Option<u64>,
+        _flags: u32,
+    ) -> Result<usize> {
+        Err(Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn async_write(
+        &self,
+        _ctx: &Context,
+        _inode: Self::Inode,
+        _handle: Self::Handle,
+        _r: &mut (dyn AsyncZeroCopyReader + Send),
+        _size: u32,
+        _offset: u64,
+        _lock_owner: Option<u64>,
+        _delayed_write: bool,
+        _flags: u32,
+        _fuse_flags: u32,
+    ) -> Result<usize> {
+        Err(Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    async fn async_fsync(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        datasync: bool,
+        handle: Self::Handle,
+    ) -> Result<()> {
+        self.fsync(ctx, inode, datasync, handle)
+    }
+
+    async fn async_fallocate(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        mode: u32,
+        offset: u64,
+        length: u64,
+    ) -> Result<()> {
+        self.fallocate(ctx, inode, handle, mode, offset, length)
+    }
+
+    async fn async_fsyncdir(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        datasync: bool,
+        handle: Self::Handle,
+    ) -> Result<()> {
+        self.fsyncdir(ctx, inode, datasync, handle)
     }
 }
 

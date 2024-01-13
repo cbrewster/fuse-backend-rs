@@ -38,7 +38,7 @@ impl AsyncFileSystem for Vfs {
         handle: Option<<Self as FileSystem>::Handle>,
     ) -> Result<(libc::stat64, Duration)> {
         match self.get_real_rootfs(inode)? {
-            (Left(fs), idata) => fs.getattr(ctx, idata.ino(), handle),
+            (Left(fs), idata) => fs.async_getattr(ctx, idata.ino(), handle).await,
             (Right(fs), idata) => fs.async_getattr(ctx, idata.ino(), handle).await,
         }
     }
@@ -52,7 +52,10 @@ impl AsyncFileSystem for Vfs {
         valid: SetattrValid,
     ) -> Result<(libc::stat64, Duration)> {
         match self.get_real_rootfs(inode)? {
-            (Left(fs), idata) => fs.setattr(ctx, idata.ino(), attr, handle, valid),
+            (Left(fs), idata) => {
+                fs.async_setattr(ctx, idata.ino(), attr, handle, valid)
+                    .await
+            }
             (Right(fs), idata) => {
                 fs.async_setattr(ctx, idata.ino(), attr, handle, valid)
                     .await
@@ -92,9 +95,7 @@ impl AsyncFileSystem for Vfs {
         validate_path_component(name)?;
 
         match self.get_real_rootfs(parent)? {
-            (Left(fs), idata) => fs
-                .create(ctx, idata.ino(), name, args)
-                .map(|(a, b, c, _)| (a, b, c)),
+            (Left(fs), idata) => fs.async_create(ctx, idata.ino(), name, args).await,
             (Right(fs), idata) => {
                 fs.async_create(ctx, idata.ino(), name, args)
                     .await
@@ -169,7 +170,7 @@ impl AsyncFileSystem for Vfs {
         handle: <Self as FileSystem>::Handle,
     ) -> Result<()> {
         match self.get_real_rootfs(inode)? {
-            (Left(fs), idata) => fs.fsync(ctx, idata.ino(), datasync, handle),
+            (Left(fs), idata) => fs.async_fsync(ctx, idata.ino(), datasync, handle).await,
             (Right(fs), idata) => fs.async_fsync(ctx, idata.ino(), datasync, handle).await,
         }
     }
@@ -184,7 +185,10 @@ impl AsyncFileSystem for Vfs {
         length: u64,
     ) -> Result<()> {
         match self.get_real_rootfs(inode)? {
-            (Left(fs), idata) => fs.fallocate(ctx, idata.ino(), handle, mode, offset, length),
+            (Left(fs), idata) => {
+                fs.async_fallocate(ctx, idata.ino(), handle, mode, offset, length)
+                    .await
+            }
             (Right(fs), idata) => {
                 fs.async_fallocate(ctx, idata.ino(), handle, mode, offset, length)
                     .await
@@ -200,7 +204,7 @@ impl AsyncFileSystem for Vfs {
         handle: <Self as FileSystem>::Handle,
     ) -> Result<()> {
         match self.get_real_rootfs(inode)? {
-            (Left(fs), idata) => fs.fsyncdir(ctx, idata.ino(), datasync, handle),
+            (Left(fs), idata) => fs.async_fsyncdir(ctx, idata.ino(), datasync, handle).await,
             (Right(fs), idata) => fs.async_fsyncdir(ctx, idata.ino(), datasync, handle).await,
         }
     }
