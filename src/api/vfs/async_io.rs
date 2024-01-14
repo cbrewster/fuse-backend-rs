@@ -9,7 +9,7 @@ use futures::{stream::BoxStream, StreamExt};
 
 use super::*;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl AsyncFileSystem for Vfs {
     async fn async_lookup(
         &self,

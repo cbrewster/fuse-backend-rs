@@ -74,7 +74,7 @@ pub trait AsyncZeroCopyWriter: ZeroCopyWriter {
 
 /// The main trait that connects a file system with a transport with asynchronous IO.
 #[allow(unused_variables)]
-#[async_trait]
+#[async_trait(?Send)]
 pub trait AsyncFileSystem: FileSystem {
     /// Look up a directory entry by name and get its attributes.
     ///
@@ -838,11 +838,11 @@ pub trait AsyncFileSystem: FileSystem {
 }
 
 type AttrFuture<'async_trait> =
-    Box<dyn Future<Output = io::Result<(stat64, Duration)>> + Send + 'async_trait>;
+    Box<dyn Future<Output = io::Result<(stat64, Duration)>> + 'async_trait>;
 type OpenFuture<'async_trait, H> =
-    Box<dyn Future<Output = io::Result<(Option<H>, OpenOptions)>> + Send + 'async_trait>;
+    Box<dyn Future<Output = io::Result<(Option<H>, OpenOptions)>> + 'async_trait>;
 type CreateFuture<'async_trait, H> =
-    Box<dyn Future<Output = io::Result<(Entry, Option<H>, OpenOptions)>> + Send + 'async_trait>;
+    Box<dyn Future<Output = io::Result<(Entry, Option<H>, OpenOptions)>> + 'async_trait>;
 
 impl<FS: AsyncFileSystem> AsyncFileSystem for Arc<FS> {
     fn async_lookup<'a, 'b, 'c, 'async_trait>(
@@ -850,7 +850,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for Arc<FS> {
         ctx: &'b Context,
         parent: Self::Inode,
         name: &'c CStr,
-    ) -> Pin<Box<dyn Future<Output = io::Result<Entry>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = io::Result<Entry>> + 'async_trait>>
     where
         'a: 'async_trait,
         'b: 'async_trait,
@@ -931,7 +931,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for Arc<FS> {
         offset: u64,
         lock_owner: Option<u64>,
         flags: u32,
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'async_trait>>
     where
         'a: 'async_trait,
         'b: 'async_trait,
@@ -954,7 +954,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for Arc<FS> {
         delayed_write: bool,
         flags: u32,
         fuse_flags: u32,
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'async_trait>>
     where
         'a: 'async_trait,
         'b: 'async_trait,
@@ -981,7 +981,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for Arc<FS> {
         inode: Self::Inode,
         datasync: bool,
         handle: Self::Handle,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + 'async_trait>>
     where
         'a: 'async_trait,
         'b: 'async_trait,
@@ -998,7 +998,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for Arc<FS> {
         mode: u32,
         offset: u64,
         length: u64,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + 'async_trait>>
     where
         'a: 'async_trait,
         'b: 'async_trait,
@@ -1014,7 +1014,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for Arc<FS> {
         inode: Self::Inode,
         datasync: bool,
         handle: Self::Handle,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + 'async_trait>>
     where
         'a: 'async_trait,
         'b: 'async_trait,

@@ -17,8 +17,7 @@ use crate::{
     },
 };
 
-#[cfg(feature = "async-io")]
-#[async_trait]
+#[async_trait(?Send)]
 impl AsyncFileSystem for PseudoFs {
     async fn async_lookup(&self, ctx: &Context, parent: Self::Inode, name: &CStr) -> Result<Entry> {
         self.lookup(ctx, parent, name)

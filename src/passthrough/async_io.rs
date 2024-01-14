@@ -309,7 +309,7 @@ impl<S: BitmapSlice + Send + Sync> PassthroughFs<S> {
      */
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<S: BitmapSlice + Send + Sync> AsyncFileSystem for PassthroughFs<S> {
     async fn async_lookup(
         &self,

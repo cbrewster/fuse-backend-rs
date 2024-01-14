@@ -1150,15 +1150,13 @@ mod tests {
 
     #[cfg(feature = "async-io")]
     mod async_io {
-        use std::pin::Pin;
-
         use super::*;
         use crate::abi::fuse_abi::{OpenOptions, SetattrValid};
         use async_trait::async_trait;
-        use futures::{stream::BoxStream, Stream};
+        use futures::stream::BoxStream;
 
         #[allow(unused_variables)]
-        #[async_trait]
+        #[async_trait(?Send)]
         impl AsyncFileSystem for FakeFileSystemOne {
             async fn async_lookup(
                 &self,
@@ -1321,7 +1319,7 @@ mod tests {
         }
 
         #[allow(unused_variables)]
-        #[async_trait]
+        #[async_trait(?Send)]
         impl AsyncFileSystem for FakeFileSystemTwo {
             async fn async_lookup(
                 &self,
