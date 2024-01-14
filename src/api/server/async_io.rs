@@ -82,6 +82,14 @@ impl<'a, S: BitmapSlice> AsyncZeroCopyWriter for AsyncZcWriter<'a, S> {
     ) -> io::Result<usize> {
         self.0.async_write_from_at(&f, count, off).await
     }
+
+    async fn async_write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.async_write(buf).await
+    }
+
+    async fn async_write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        self.0.async_write_all(buf).await
+    }
 }
 
 impl<'a, S: BitmapSlice> ZeroCopyWriter for AsyncZcWriter<'a, S> {

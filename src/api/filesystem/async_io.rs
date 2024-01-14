@@ -64,6 +64,12 @@ pub trait AsyncZeroCopyWriter: ZeroCopyWriter {
         count: usize,
         off: u64,
     ) -> io::Result<usize>;
+
+    /// TODO
+    async fn async_write(&mut self, buf: &[u8]) -> io::Result<usize>;
+
+    /// TODO
+    async fn async_write_all(&mut self, buf: &[u8]) -> io::Result<()>;
 }
 
 /// The main trait that connects a file system with a transport with asynchronous IO.
